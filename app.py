@@ -25,6 +25,9 @@ store_file = st.file_uploader("Storelist")
 st.markdown("### 📊 Markup % Formula")
 st.info("Markup % = (Invoice Cost - Total Cost) / Total Cost")
 
+# 🔥 NEW: UOM Threshold Input
+uom_threshold = st.number_input("UOM Threshold", value=1.2)
+
 if inv_file and prod_file and front_file and tax_file and store_file:
 
     inv = load_file(inv_file)
@@ -57,11 +60,11 @@ if inv_file and prod_file and front_file and tax_file and store_file:
     store_state = "stateAbbrev"
 
     # TAX SELECTORS
-    tax_state = st.selectbox("State", tax.columns)
-    tax_type_col = st.selectbox("Product Type", tax.columns)
+    tax_state = st.selectbox("Tax State", tax.columns)
+    tax_type_col = st.selectbox("Tax Product Type", tax.columns)
     tax_percentage_col = st.selectbox("Percentage", tax.columns)
-    tax_value = st.selectbox("Flat Tax", tax.columns)
-    uom_tax_col = st.selectbox("Unit Size * Tax", tax.columns)
+    tax_value = st.selectbox("Tax", tax.columns)
+    uom_tax_col = st.selectbox("Products/Case * Tax", tax.columns)
 
     if st.button("🚀 Run Analysis"):
 
@@ -182,7 +185,7 @@ if inv_file and prod_file and front_file and tax_file and store_file:
         merged["Products/Case * Tax"] = clean_numeric(merged[uom_tax_col])
         merged["Frontline"] = clean_numeric(merged[front_cost])
         merged["Products/Case"] = clean_numeric(merged["Products/Case"])
-        merged["Unit Size"] = clean_numeric(merged[prod_unit_size])  # 🔥 NEW
+        merged["Unit Size"] = clean_numeric(merged[prod_unit_size])
 
         # ==============================
         # TAX ENGINE
@@ -198,13 +201,29 @@ if inv_file and prod_file and front_file and tax_file and store_file:
         # 2️⃣ Flat Tax
         mask_tax = merged["TaxValue"].notna() & (~mask_pct)
         merged.loc[mask_tax, "Tax"] = merged["TaxValue"]
-        merged.loc[mask_tax, "Tax Rule Applied"] = "Flat Tax"
+        merged.loc[mask_tax, "Tax Rule Applied"] = "Tax Value"
 
-        # 3️⃣ Case-based tax (UPDATED 🔥)
+        # 3️⃣ UOM Threshold Rule (NEW 🔥)
+        mask_uom = (
+            merged["Products/Case * Tax"].notna() &
+            merged["Products/Case"].notna() &
+            merged["Unit Size"].notna() &
+            (merged["Unit Size"] > uom_threshold)
+        ) & (~mask_pct) & (~mask_tax)
+
+        merged.loc[mask_uom, "Tax"] = (
+            merged["Products/Case"] *
+            merged["Unit Size"] *
+            merged["Products/Case * Tax"]
+        )
+        merged.loc[mask_uom, "Tax Rule Applied"] = "UOM Threshold Case Tax"
+
+        # 4️⃣ Regular Case Tax
         mask_case = (
             merged["Products/Case * Tax"].notna() &
             merged["Products/Case"].notna() &
-            merged["Unit Size"].notna()
+            merged["Unit Size"].notna() &
+            (~mask_uom)
         ) & (~mask_pct) & (~mask_tax)
 
         merged.loc[mask_case, "Tax"] = (
@@ -212,7 +231,7 @@ if inv_file and prod_file and front_file and tax_file and store_file:
             merged["Unit Size"] *
             merged["Products/Case * Tax"]
         )
-        merged.loc[mask_case, "Tax Rule Applied"] = "Unit Size * Tax"
+        merged.loc[mask_case, "Tax Rule Applied"] = "Case * Unit Size * Rate"
 
         merged["Tax"] = merged["Tax"].fillna(0)
 
