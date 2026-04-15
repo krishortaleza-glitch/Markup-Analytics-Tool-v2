@@ -46,7 +46,7 @@ if inv_file and prod_file and front_file and tax_file and store_file:
     prod_family = "Family"
     prod_type = "Type"
     prod_case = "Products/Case"
-    prod_unit_size = "Unit Size"
+    prod_unit_size = st.selectbox("Unit Size Column", prod.columns)
 
     front_family = "Family"
     front_cost = "CasePrice"
@@ -62,7 +62,7 @@ if inv_file and prod_file and front_file and tax_file and store_file:
     tax_percentage_col = st.selectbox("Percentage", tax.columns)
     tax_value = st.selectbox("Tax", tax.columns)
     uom_tax_col = st.selectbox("Products/Case * Tax", tax.columns)
-    tax_threshold_col = st.selectbox("UOM Threshold Column", tax.columns)  # 🔥 NEW
+    tax_threshold_col = st.selectbox("UOM Threshold Column", tax.columns)
 
     if st.button("🚀 Run Analysis"):
 
@@ -188,6 +188,17 @@ if inv_file and prod_file and front_file and tax_file and store_file:
         merged["Unit Size"] = clean_numeric(merged[prod_unit_size])
 
         # ==============================
+        # EFFECTIVE UNIT SIZE (🔥 NEW LOGIC)
+        # ==============================
+        merged["Effective Unit Size"] = merged["Unit Size"]
+
+        mask_threshold = merged["UOM Threshold"].notna()
+
+        merged.loc[mask_threshold, "Effective Unit Size"] = merged.loc[mask_threshold][
+            ["Unit Size", "UOM Threshold"]
+        ].max(axis=1)
+
+        # ==============================
         # TAX ENGINE
         # ==============================
         merged["Tax"] = 0.0
@@ -203,38 +214,24 @@ if inv_file and prod_file and front_file and tax_file and store_file:
         merged.loc[mask_tax, "Tax"] = merged["TaxValue"]
         merged.loc[mask_tax, "Tax Rule Applied"] = "Tax Value"
 
-        # 3️⃣ UOM Threshold Rule (State-Specific)
-        mask_uom = (
-            merged["Products/Case * Tax"].notna() &
-            merged["Products/Case"].notna() &
-            merged["Unit Size"].notna() &
-            merged["UOM Threshold"].notna() &
-            (merged["Unit Size"] > merged["UOM Threshold"])
-        ) & (~mask_pct) & (~mask_tax)
-
-        merged.loc[mask_uom, "Tax"] = (
-            merged["Products/Case"] *
-            merged["Unit Size"] *
-            merged["Products/Case * Tax"]
-        )
-        merged.loc[mask_uom, "Tax Rule Applied"] = "UOM Threshold Case Tax"
-
-        # 4️⃣ Regular Case Tax
+        # 3️⃣ Case / UOM Logic (Unified 🔥)
         mask_case = (
             merged["Products/Case * Tax"].notna() &
             merged["Products/Case"].notna() &
-            merged["Unit Size"].notna() &
-            (~mask_uom)
+            merged["Effective Unit Size"].notna()
         ) & (~mask_pct) & (~mask_tax)
 
         merged.loc[mask_case, "Tax"] = (
             merged["Products/Case"] *
-            merged["Unit Size"] *
+            merged["Effective Unit Size"] *
             merged["Products/Case * Tax"]
         )
-        merged.loc[mask_case, "Tax Rule Applied"] = "Case * Unit Size * Rate"
+
+        merged.loc[mask_case, "Tax Rule Applied"] = "Case * Effective Unit Size * Rate"
 
         merged["Tax"] = merged["Tax"].fillna(0)
+
+        progress.progress(90)
 
         # ==============================
         # CALCULATIONS
@@ -246,8 +243,6 @@ if inv_file and prod_file and front_file and tax_file and store_file:
         merged["Markup %"] = merged["Markup"] / merged["Total Cost"]
 
         merged["Markup %"] = merged["Markup %"].replace([float("inf"), -float("inf")], 0)
-
-        progress.progress(90)
 
         # ==============================
         # FREQUENCY
