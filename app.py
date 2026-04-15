@@ -46,7 +46,7 @@ if inv_file and prod_file and front_file and tax_file and store_file:
     prod_family = "Family"
     prod_type = "Type"
     prod_case = "Products/Case"
-    prod_unit_size = "UnitSize"
+    prod_unit_size = "Unit Size"
 
     front_family = "Family"
     front_cost = "CasePrice"
