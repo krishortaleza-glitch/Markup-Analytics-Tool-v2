@@ -46,7 +46,7 @@ if inv_file and prod_file and front_file and tax_file and store_file:
     prod_family = "Family"
     prod_type = "Type"
     prod_case = "Products/Case"
-    prod_unit_size = "Unit Size"
+    prod_unit_size = "UnitSize"
 
     front_family = "Family"
     front_cost = "CasePrice"
@@ -57,7 +57,7 @@ if inv_file and prod_file and front_file and tax_file and store_file:
     store_state = "stateAbbrev"
 
     # ==============================
-    # 🔥 UPDATED LABELS
+    # UI LABELS (UPDATED)
     # ==============================
     tax_state = st.selectbox("State Tax", tax.columns)
     tax_type_col = st.selectbox("Product Type", tax.columns)
@@ -67,6 +67,8 @@ if inv_file and prod_file and front_file and tax_file and store_file:
     tax_threshold_col = st.selectbox("Min UOM", tax.columns)
 
     if st.button("🚀 Run Analysis"):
+
+        progress = st.progress(0)
 
         def clean_numeric(series):
             return pd.to_numeric(series.astype(str).str.strip(), errors="coerce")
@@ -90,6 +92,8 @@ if inv_file and prod_file and front_file and tax_file and store_file:
         prod["Family"] = clean_text(prod[prod_family])
         front["Family"] = clean_text(front[front_family])
 
+        progress.progress(10)
+
         # PRODUCT MERGE
         prod = prod.drop_duplicates(subset=["ProductID"])
 
@@ -99,10 +103,12 @@ if inv_file and prod_file and front_file and tax_file and store_file:
             how="left"
         )
 
+        progress.progress(25)
+
         merged["Type"] = clean_text(merged["Type"])
         tax["ProductType"] = clean_text(tax[tax_type_col])
 
-        # FRONTLINE
+        # FRONTLINE FILTER
         today = pd.Timestamp.today().normalize()
 
         front[front_start] = pd.to_datetime(front[front_start], errors="coerce")
@@ -120,11 +126,15 @@ if inv_file and prod_file and front_file and tax_file and store_file:
             .drop_duplicates(subset=["Family"])
         )
 
+        progress.progress(45)
+
         merged = merged.merge(
             active_front[["Family", front_cost]],
             on="Family",
             how="left"
         )
+
+        progress.progress(60)
 
         # STORE → STATE
         merged = merged.merge(
@@ -132,6 +142,8 @@ if inv_file and prod_file and front_file and tax_file and store_file:
             on="Store",
             how="left"
         )
+
+        progress.progress(75)
 
         # TAX MERGE
         merged = merged.merge(
@@ -141,7 +153,9 @@ if inv_file and prod_file and front_file and tax_file and store_file:
             how="left"
         )
 
-        # NUMERIC CLEAN
+        progress.progress(85)
+
+        # CLEAN NUMERIC
         merged["Percentage"] = clean_numeric(merged[tax_percentage_col])
         merged["TaxValue"] = clean_numeric(merged[tax_value])
         merged["Products/Case * Tax"] = clean_numeric(merged[uom_tax_col])
@@ -153,8 +167,8 @@ if inv_file and prod_file and front_file and tax_file and store_file:
 
         # EFFECTIVE UNIT SIZE
         merged["Effective Unit Size"] = merged["Unit Size"]
-
         mask_threshold = merged["UOM Threshold"].notna()
+
         merged.loc[mask_threshold, "Effective Unit Size"] = merged.loc[mask_threshold][
             ["Unit Size", "UOM Threshold"]
         ].max(axis=1)
@@ -190,15 +204,72 @@ if inv_file and prod_file and front_file and tax_file and store_file:
 
         merged["Tax"] = merged["Tax"].fillna(0)
 
+        progress.progress(90)
+
         # CALCULATIONS
         merged["Invoice Cost"] = clean_numeric(merged[inv_cost])
         merged["Total Cost"] = merged["Frontline"] + merged["Tax"]
         merged["Markup"] = merged["Invoice Cost"] - merged["Total Cost"]
         merged["Markup %"] = merged["Markup"] / merged["Total Cost"]
+        merged["Markup %"] = merged["Markup %"].replace([float("inf"), -float("inf")], 0)
 
+        # FREQUENCY + TOP
+        freq = (
+            merged
+            .groupby(["State", "Family", "Type", "Invoice Cost"])
+            .size()
+            .reset_index(name="Frequency")
+        )
+
+        freq["Top"] = (
+            freq.groupby(["State", "Family", "Type"])["Frequency"]
+            .transform("max") == freq["Frequency"]
+        )
+
+        merged = merged.merge(freq, on=["State", "Family", "Type", "Invoice Cost"], how="left")
+
+        # DEDUP
+        merged = merged.sort_values("Tax", ascending=False)
+        merged = merged.drop_duplicates(
+            subset=["State", "Family", "Type", "Invoice Cost"],
+            keep="first"
+        )
+
+        # FINAL OUTPUT
         final = merged[[
             "State","Family","Type","Invoice Cost","Frontline","Tax",
-            "Total Cost","Markup","Markup %","Tax Rule Applied"
+            "Total Cost","Markup","Markup %","Frequency","Top","Tax Rule Applied"
         ]]
 
-        st.dataframe(final)
+        # ==============================
+        # EXPORT
+        # ==============================
+        output = BytesIO()
+
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            final.to_excel(writer, sheet_name="Analysis", index=False)
+            merged.to_excel(writer, sheet_name="Full Output", index=False)
+
+        output.seek(0)
+
+        # HIGHLIGHT TOP
+        wb = load_workbook(output)
+        ws = wb["Analysis"]
+
+        green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        top_col_index = list(final.columns).index("Top") + 1
+
+        for row in range(2, ws.max_row + 1):
+            if ws.cell(row=row, column=top_col_index).value:
+                for col in range(1, ws.max_column + 1):
+                    ws.cell(row=row, column=col).fill = green_fill
+
+        final_output = BytesIO()
+        wb.save(final_output)
+        final_output.seek(0)
+
+        st.download_button(
+            "📥 Download Analysis",
+            data=final_output,
+            file_name=f"markup_analysis_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        )
